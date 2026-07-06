@@ -1,9 +1,9 @@
 "use client";
 
-import { useStore, Feature, FeaturePriority, RoadmapPhase } from "@/lib/store";
+import { useStore, Feature, FeaturePriority, FeatureStatus, RoadmapPhase } from "@/lib/store";
 import { computeRICE } from "@/lib/helpers";
 import { useState, useMemo } from "react";
-import { Plus, BarChart, Edit2, Trash2, Layers } from "lucide-react";
+import { Plus, BarChart, Edit2, Trash2, Layers, LayoutGrid, List as ListIcon, User } from "lucide-react";
 import { SearchFilterBar } from "@/components/SearchFilterBar";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { TagInput } from "@/components/TagInput";
@@ -11,7 +11,7 @@ import { MarkdownEditor } from "@/components/MarkdownRenderer";
 import Link from "next/link";
 
 export default function FeaturePlannerPage() {
-  const { features, addFeature, updateFeature, deleteFeature, releases } = useStore();
+  const { features, addFeature, updateFeature, deleteFeature, releases, stakeholders } = useStore();
   
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingFeatureId, setEditingFeatureId] = useState<string | null>(null);
@@ -19,12 +19,15 @@ export default function FeaturePlannerPage() {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [priority, setPriority] = useState<FeaturePriority>("Medium");
+  const [status, setStatus] = useState<FeatureStatus>("Draft");
+  const [assigneeId, setAssigneeId] = useState<string>("");
   const [impact, setImpact] = useState(5);
   const [effort, setEffort] = useState(5);
   const [reach, setReach] = useState(100);
   const [confidence, setConfidence] = useState(80);
   const [phase, setPhase] = useState<RoadmapPhase>("Later");
   const [releaseId, setReleaseId] = useState<string>("");
+  const [dependsOn, setDependsOn] = useState<string[]>([]);
   const [tags, setTags] = useState<string[]>([]);
 
   // Search, Filter, Sort
@@ -32,7 +35,13 @@ export default function FeaturePlannerPage() {
   const [sortValue, setSortValue] = useState("score");
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>("desc");
   const [selectedPriorities, setSelectedPriorities] = useState<string[]>([]);
+  const [selectedStatuses, setSelectedStatuses] = useState<string[]>([]);
+  const [selectedPhases, setSelectedPhases] = useState<string[]>([]);
   
+  // View Mode
+  const [viewMode, setViewMode] = useState<'list' | 'kanban'>('list');
+  const [hideDone, setHideDone] = useState(false);
+
   // Bulk Selection
   const [isBulkMode, setIsBulkMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -46,12 +55,15 @@ export default function FeaturePlannerPage() {
     setTitle("");
     setDescription("");
     setPriority("Medium");
+    setStatus("Draft");
+    setAssigneeId("");
     setImpact(5);
     setEffort(5);
     setReach(100);
     setConfidence(80);
     setPhase("Later");
     setReleaseId("");
+    setDependsOn([]);
     setTags([]);
     setIsModalOpen(true);
   };
@@ -61,12 +73,15 @@ export default function FeaturePlannerPage() {
     setTitle(f.title);
     setDescription(f.description);
     setPriority(f.priority);
+    setStatus(f.status || "Draft");
+    setAssigneeId(f.assigneeId || "");
     setImpact(f.impactScore);
     setEffort(f.effortScore);
     setReach(f.reach || 100);
     setConfidence(f.confidence || 80);
     setPhase(f.roadmapPhase || "Later");
     setReleaseId(f.releaseId || "");
+    setDependsOn(f.dependsOn || []);
     setTags(f.tags || []);
     setIsModalOpen(true);
   };
@@ -80,12 +95,15 @@ export default function FeaturePlannerPage() {
         title: title.trim(),
         description: description.trim(),
         priority,
+        status,
+        assigneeId: assigneeId || undefined,
         impactScore: impact,
         effortScore: effort,
         reach,
         confidence,
         roadmapPhase: phase,
         releaseId: releaseId || undefined,
+        dependsOn,
         tags
       });
     } else {
@@ -94,14 +112,16 @@ export default function FeaturePlannerPage() {
         title: title.trim(),
         description: description.trim(),
         priority,
+        status,
+        assigneeId: assigneeId || undefined,
         impactScore: impact,
         effortScore: effort,
         reach,
         confidence,
         roadmapPhase: phase,
         releaseId: releaseId || undefined,
+        dependsOn,
         tags,
-        dependsOn: [],
         createdAt: new Date().toISOString()
       });
     }
@@ -131,10 +151,23 @@ export default function FeaturePlannerPage() {
 
   const filteredFeatures = useMemo(() => {
     return features.filter(f => {
+      const featStatus = f.status || 'Draft';
+      
+      if (viewMode === 'list' && hideDone && featStatus === 'Done') {
+        return false;
+      }
+
       if (searchQuery && !f.title.toLowerCase().includes(searchQuery.toLowerCase()) && !(f.description || "").toLowerCase().includes(searchQuery.toLowerCase())) {
         return false;
       }
       if (selectedPriorities.length > 0 && !selectedPriorities.includes(f.priority)) {
+        return false;
+      }
+      if (selectedStatuses.length > 0 && !selectedStatuses.includes(featStatus)) {
+        return false;
+      }
+      const featPhase = f.roadmapPhase || 'Later';
+      if (selectedPhases.length > 0 && !selectedPhases.includes(featPhase)) {
         return false;
       }
       return true;
@@ -154,7 +187,7 @@ export default function FeaturePlannerPage() {
       if (valA > valB) return sortDirection === 'asc' ? 1 : -1;
       return 0;
     });
-  }, [features, searchQuery, selectedPriorities, sortValue, sortDirection]);
+  }, [features, searchQuery, selectedPriorities, selectedStatuses, selectedPhases, sortValue, sortDirection, hideDone, viewMode]);
 
   const priorityColors = {
     "Critical": "bg-destructive/10 text-destructive border-destructive/20",
@@ -163,14 +196,170 @@ export default function FeaturePlannerPage() {
     "Low": "bg-muted text-muted-foreground border-border"
   };
 
+  const statusColors: Record<FeatureStatus, string> = {
+    "Draft": "bg-muted text-muted-foreground border-border",
+    "In Development": "bg-blue-500/10 text-blue-500 border-blue-500/20",
+    "QA": "bg-purple-500/10 text-purple-500 border-purple-500/20",
+    "Done": "bg-green-500/10 text-green-500 border-green-500/20"
+  };
+
+  const ALL_STATUSES: FeatureStatus[] = ['Draft', 'In Development', 'QA', 'Done'];
+
+  // Summary counts
+  const priorityCounts = features.reduce((acc, f) => {
+    acc[f.priority] = (acc[f.priority] || 0) + 1;
+    return acc;
+  }, {} as Record<string, number>);
+
+  const renderFeatureCard = (feature: Feature, compact: boolean = false) => {
+    const score = computeRICE(feature.reach, feature.impactScore, feature.confidence, feature.effortScore);
+    const assignedRelease = releases.find(r => r.id === feature.releaseId);
+    const assignee = stakeholders.find(s => s.id === feature.assigneeId);
+    const isSelected = selectedIds.has(feature.id);
+    const featStatus = feature.status || 'Draft';
+    
+    return (
+      <div key={feature.id} className={`p-4 rounded-xl border bg-card shadow-sm flex flex-col gap-3 group transition-colors relative ${isSelected ? 'border-primary bg-primary/5 ring-1 ring-primary' : 'border-border'} ${compact ? 'hover:border-primary/50' : ''}`}>
+        
+        {isBulkMode && !compact && (
+          <div className="absolute left-3 top-4 z-10">
+            <input 
+              type="checkbox" 
+              checked={isSelected}
+              onChange={() => toggleSelection(feature.id)}
+              className="w-5 h-5 rounded border-input text-primary focus:ring-primary"
+            />
+          </div>
+        )}
+
+        <div className={`flex flex-col gap-1 ${isBulkMode && !compact ? 'pl-8' : ''}`}>
+          <div className="flex items-start justify-between gap-2">
+            <Link href={`/features/${feature.id}`} className="font-semibold text-base hover:text-primary transition-colors line-clamp-2">
+              {feature.title}
+            </Link>
+            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
+              <button 
+                onClick={(e) => { e.preventDefault(); openEditModal(feature); }}
+                className="p-1 text-muted-foreground hover:text-foreground rounded hover:bg-accent"
+                title="Edit Feature"
+              >
+                <Edit2 className="w-3.5 h-3.5" />
+              </button>
+              <button 
+                onClick={(e) => { e.preventDefault(); setItemToDelete(feature.id); }}
+                className="p-1 text-muted-foreground hover:text-destructive rounded hover:bg-destructive/10"
+                title="Delete Feature"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+          
+          <div className="flex flex-wrap gap-1.5 mt-1">
+            <select 
+              value={featStatus}
+              onChange={(e) => updateFeature(feature.id, { status: e.target.value as FeatureStatus })}
+              className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full border outline-none cursor-pointer ${statusColors[featStatus as keyof typeof statusColors]}`}
+            >
+              <option value="Draft">Draft</option>
+              <option value="In Development">In Dev</option>
+              <option value="QA">QA</option>
+              <option value="Done">Done</option>
+            </select>
+            
+            <select 
+              value={feature.priority}
+              onChange={(e) => updateFeature(feature.id, { priority: e.target.value as FeaturePriority })}
+              className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full border outline-none cursor-pointer ${priorityColors[feature.priority]}`}
+            >
+              <option value="Critical">Critical</option>
+              <option value="High">High</option>
+              <option value="Medium">Medium</option>
+              <option value="Low">Low</option>
+            </select>
+
+            <select 
+              value={feature.roadmapPhase || "Later"}
+              onChange={(e) => updateFeature(feature.id, { roadmapPhase: e.target.value as RoadmapPhase })}
+              className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-accent text-accent-foreground border border-border outline-none cursor-pointer"
+            >
+              <option value="Now">Phase: Now</option>
+              <option value="Next">Phase: Next</option>
+              <option value="Later">Phase: Later</option>
+            </select>
+          </div>
+        </div>
+
+        {!compact && (
+          <p className={`text-sm text-muted-foreground line-clamp-2 ${isBulkMode ? 'pl-8' : ''}`}>
+            {feature.description.replace(/[*#]/g, '') || 'No description provided.'}
+          </p>
+        )}
+        
+        <div className={`flex items-center justify-between mt-auto pt-2 border-t border-border/50 ${isBulkMode && !compact ? 'pl-8' : ''}`}>
+          <div className="flex items-center gap-2">
+            <div className="text-sm font-bold flex items-center gap-1" title="RICE Score">
+              <BarChart className="w-3.5 h-3.5 text-primary" />
+              {score}
+            </div>
+            {assignedRelease && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded border border-border text-muted-foreground whitespace-nowrap">
+                v{assignedRelease.version}
+              </span>
+            )}
+          </div>
+          
+          <div className="flex items-center gap-1">
+            {assignee ? (
+              <div className="w-6 h-6 rounded-full bg-primary/10 text-primary border border-primary/20 flex items-center justify-center text-[10px] font-bold" title={`Assigned to ${assignee.name}`}>
+                {assignee.name.charAt(0).toUpperCase()}
+              </div>
+            ) : (
+              <div className="w-6 h-6 rounded-full bg-muted border border-border flex items-center justify-center text-[10px] text-muted-foreground" title="Unassigned">
+                <User className="w-3 h-3" />
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   return (
-    <div className="max-w-6xl mx-auto space-y-8">
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+    <div className="max-w-[1400px] mx-auto space-y-6 h-full flex flex-col pb-8">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 flex-shrink-0">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Feature Planner</h1>
-          <p className="text-muted-foreground mt-1">Manage backlog with RICE scoring, tags, and detailed planning.</p>
+          <div className="flex items-center gap-3 mt-1 text-sm text-muted-foreground">
+            <span>Total: {features.length}</span>
+            {priorityCounts['Critical'] > 0 && <span className="text-destructive">• Critical: {priorityCounts['Critical']}</span>}
+            {priorityCounts['High'] > 0 && <span className="text-orange-500">• High: {priorityCounts['High']}</span>}
+          </div>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 items-center">
+          {viewMode === 'list' && (
+            <label className="flex items-center gap-2 mr-2 text-sm font-medium text-muted-foreground cursor-pointer hover:text-foreground transition-colors">
+              <input type="checkbox" checked={hideDone} onChange={e => setHideDone(e.target.checked)} className="rounded border-input text-primary focus:ring-primary cursor-pointer" />
+              Hide Done
+            </label>
+          )}
+          <div className="flex items-center bg-accent rounded-md p-1 border border-border mr-2">
+            <button 
+              onClick={() => setViewMode('list')}
+              className={`p-1.5 rounded-sm transition-colors ${viewMode === 'list' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+              title="List View"
+            >
+              <ListIcon className="w-4 h-4" />
+            </button>
+            <button 
+              onClick={() => setViewMode('kanban')}
+              className={`p-1.5 rounded-sm transition-colors ${viewMode === 'kanban' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+              title="Kanban Board View"
+            >
+              <LayoutGrid className="w-4 h-4" />
+            </button>
+          </div>
+
           {isBulkMode && selectedIds.size > 0 && (
             <button 
               onClick={() => setBulkDeleteConfirm(true)}
@@ -182,7 +371,7 @@ export default function FeaturePlannerPage() {
           )}
           <button 
             onClick={openAddModal}
-            className="px-4 py-2 bg-primary text-primary-foreground hover:bg-primary/90 rounded-md text-sm font-medium flex items-center gap-2"
+            className="px-4 py-2 bg-primary text-primary-foreground hover:bg-primary/90 rounded-md text-sm font-medium flex items-center gap-2 shadow-sm"
           >
             <Plus className="w-4 h-4" />
             New Feature
@@ -190,180 +379,146 @@ export default function FeaturePlannerPage() {
         </div>
       </div>
 
-      <SearchFilterBar 
-        searchQuery={searchQuery}
-        onSearchChange={setSearchQuery}
-        filters={[
-          {
-            id: 'priority',
-            label: 'Priority',
-            options: [
-              { label: 'Critical', value: 'Critical' },
-              { label: 'High', value: 'High' },
-              { label: 'Medium', value: 'Medium' },
-              { label: 'Low', value: 'Low' }
-            ],
-            value: selectedPriorities,
-            onChange: setSelectedPriorities
-          }
-        ]}
-        sortOptions={[
-          { label: 'RICE Score', value: 'score' },
-          { label: 'Title', value: 'title' },
-          { label: 'Impact', value: 'impactScore' },
-          { label: 'Effort', value: 'effortScore' },
-          { label: 'Created', value: 'createdAt' }
-        ]}
-        sortValue={sortValue}
-        onSortChange={setSortValue}
-        sortDirection={sortDirection}
-        onSortDirectionChange={setSortDirection}
-        isBulkMode={isBulkMode}
-        onToggleBulkMode={() => {
-          setIsBulkMode(!isBulkMode);
-          setSelectedIds(new Set());
-        }}
-        selectedCount={selectedIds.size}
-      />
+      <div className="flex-shrink-0 relative z-20">
+        <SearchFilterBar 
+          searchQuery={searchQuery}
+          onSearchChange={setSearchQuery}
+          filters={[
+            {
+              id: 'status',
+              label: 'Status',
+              options: ALL_STATUSES.map(s => ({ label: s, value: s })),
+              value: selectedStatuses,
+              onChange: setSelectedStatuses
+            },
+            {
+              id: 'priority',
+              label: 'Priority',
+              options: [
+                { label: 'Critical', value: 'Critical' },
+                { label: 'High', value: 'High' },
+                { label: 'Medium', value: 'Medium' },
+                { label: 'Low', value: 'Low' }
+              ],
+              value: selectedPriorities,
+              onChange: setSelectedPriorities
+            },
+            {
+              id: 'phase',
+              label: 'Phase',
+              options: [
+                { label: 'Now', value: 'Now' },
+                { label: 'Next', value: 'Next' },
+                { label: 'Later', value: 'Later' }
+              ],
+              value: selectedPhases,
+              onChange: setSelectedPhases
+            }
+          ]}
+          sortOptions={[
+            { label: 'RICE Score', value: 'score' },
+            { label: 'Title', value: 'title' },
+            { label: 'Impact', value: 'impactScore' },
+            { label: 'Effort', value: 'effortScore' },
+            { label: 'Created', value: 'createdAt' }
+          ]}
+          sortValue={sortValue}
+          onSortChange={setSortValue}
+          sortDirection={sortDirection}
+          onSortDirectionChange={setSortDirection}
+          isBulkMode={viewMode === 'list' ? isBulkMode : false}
+          onToggleBulkMode={viewMode === 'list' ? () => {
+            setIsBulkMode(!isBulkMode);
+            setSelectedIds(new Set());
+          } : undefined}
+          selectedCount={selectedIds.size}
+        />
+      </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-xl font-semibold flex items-center gap-2">
-              <Layers className="w-5 h-5" /> Backlog
-            </h2>
-            <span className="text-sm text-muted-foreground">{filteredFeatures.length} features</span>
+      {viewMode === 'list' ? (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 overflow-hidden flex-1">
+          <div className="lg:col-span-2 overflow-y-auto pr-2 space-y-3">
+            {filteredFeatures.length === 0 ? (
+              <div className="py-20 border border-border border-dashed rounded-xl flex items-center justify-center text-muted-foreground bg-card">
+                No features match your criteria.
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 gap-3">
+                {filteredFeatures.map(f => renderFeatureCard(f))}
+              </div>
+            )}
           </div>
 
-          {filteredFeatures.length === 0 ? (
-            <div className="py-20 border border-border border-dashed rounded-xl flex items-center justify-center text-muted-foreground bg-card">
-              No features match your criteria.
+          <div className="space-y-4 flex-shrink-0">
+            <h2 className="text-xl font-semibold">Impact vs Effort</h2>
+            <div className="aspect-square bg-card border border-border rounded-xl relative p-4 shadow-sm">
+              <div className="absolute inset-0 grid grid-cols-2 grid-rows-2 p-4">
+                <div className="border-r border-b border-border/50 bg-green-500/5 rounded-tl-lg flex items-center justify-center"><span className="text-muted-foreground/30 font-bold rotate-[-45deg]">Quick Wins</span></div>
+                <div className="border-b border-border/50 bg-blue-500/5 rounded-tr-lg flex items-center justify-center"><span className="text-muted-foreground/30 font-bold rotate-[-45deg]">Major Projects</span></div>
+                <div className="border-r border-border/50 bg-orange-500/5 rounded-bl-lg flex items-center justify-center"><span className="text-muted-foreground/30 font-bold rotate-[-45deg]">Fill-ins</span></div>
+                <div className="bg-destructive/5 rounded-br-lg flex items-center justify-center"><span className="text-muted-foreground/30 font-bold rotate-[-45deg]">Time Sink</span></div>
+              </div>
+              
+              {features.length === 0 ? (
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-20 px-8 text-center">
+                  <p className="text-muted-foreground text-sm font-medium bg-card/80 p-3 rounded-lg backdrop-blur-sm border border-border/50">
+                    Add features to see them plotted by impact vs effort.
+                  </p>
+                </div>
+              ) : (
+                features.map(f => {
+                  const bottom = `${((f.impactScore - 1) / 9) * 90 + 5}%`;
+                  const left = `${((f.effortScore - 1) / 9) * 90 + 5}%`;
+                  
+                  return (
+                    <Link 
+                      href={`/features/${f.id}`}
+                      key={f.id} 
+                      className="absolute w-3 h-3 bg-primary rounded-full cursor-pointer hover:scale-150 transition-transform shadow-sm ring-2 ring-background z-10"
+                      style={{ bottom, left }}
+                      title={`${f.title} (I:${f.impactScore}, E:${f.effortScore})`}
+                    />
+                  )
+                })
+              )}
+              
+              <div className="absolute left-2 top-1/2 -translate-y-1/2 -rotate-90 text-xs font-medium text-muted-foreground">Impact &rarr;</div>
+              <div className="absolute bottom-2 left-1/2 -translate-x-1/2 text-xs font-medium text-muted-foreground">Effort &rarr;</div>
             </div>
-          ) : (
-            <div className="space-y-3">
-              {filteredFeatures.map(feature => {
-                const score = computeRICE(feature.reach, feature.impactScore, feature.confidence, feature.effortScore);
-                const assignedRelease = releases.find(r => r.id === feature.releaseId);
-                const isSelected = selectedIds.has(feature.id);
-                
-                return (
-                  <div key={feature.id} className={`p-5 rounded-xl border bg-card shadow-sm flex flex-col sm:flex-row sm:items-center gap-4 group transition-colors ${isSelected ? 'border-primary bg-primary/5' : 'border-border'}`}>
-                    
-                    {isBulkMode && (
-                      <div className="flex items-center justify-center pt-1 sm:pt-0">
-                        <input 
-                          type="checkbox" 
-                          checked={isSelected}
-                          onChange={() => toggleSelection(feature.id)}
-                          className="w-5 h-5 rounded border-input text-primary focus:ring-primary"
-                        />
-                      </div>
-                    )}
-
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-3 mb-1">
-                        <Link href={`/features/${feature.id}`} className="font-semibold text-lg hover:text-primary transition-colors truncate">
-                          {feature.title}
-                        </Link>
-                        <span className={`text-xs px-2 py-0.5 rounded-full font-medium border ${priorityColors[feature.priority]}`}>
-                          {feature.priority}
-                        </span>
-                        {assignedRelease && (
-                          <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-accent text-accent-foreground border border-border whitespace-nowrap">
-                            v{assignedRelease.version}
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-sm text-muted-foreground line-clamp-1 mb-2">
-                        {feature.description.replace(/[*#]/g, '') || 'No description provided.'}
-                      </p>
-                      
-                      {feature.tags && feature.tags.length > 0 && (
-                        <div className="flex gap-1 flex-wrap">
-                          {feature.tags.map(t => (
-                            <span key={t} className="text-[10px] px-1.5 py-0.5 rounded bg-accent text-accent-foreground border border-border">{t}</span>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                    
-                    <div className="flex sm:flex-col gap-4 sm:gap-1 items-center sm:items-end min-w-[140px]">
-                      <div className="text-xs text-muted-foreground grid grid-cols-2 gap-x-2 text-right">
-                        <span title="Reach">R: {feature.reach}</span>
-                        <span title="Impact">I: {feature.impactScore}</span>
-                        <span title="Confidence">C: {feature.confidence}%</span>
-                        <span title="Effort">E: {feature.effortScore}</span>
-                      </div>
-                      <div className="text-sm font-bold flex items-center gap-1 mt-1">
-                        <BarChart className="w-4 h-4 text-primary" />
-                        RICE: {score}
-                      </div>
-                    </div>
-
-                    <div className="flex sm:flex-col gap-2 items-end justify-between">
-                      <div className="flex gap-1">
-                        <button 
-                          onClick={() => openEditModal(feature)}
-                          className="p-1.5 text-muted-foreground hover:text-foreground rounded hover:bg-accent"
-                          title="Edit Feature"
-                        >
-                          <Edit2 className="w-4 h-4" />
-                        </button>
-                        <button 
-                          onClick={() => setItemToDelete(feature.id)}
-                          className="p-1.5 text-muted-foreground hover:text-destructive rounded hover:bg-destructive/10"
-                          title="Delete Feature"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                      <select 
-                        value={feature.roadmapPhase}
-                        onChange={(e) => updateFeature(feature.id, { roadmapPhase: e.target.value as RoadmapPhase })}
-                        className="text-xs px-2 py-1 bg-accent rounded border-border"
-                      >
-                        <option value="Now">Now</option>
-                        <option value="Next">Next</option>
-                        <option value="Later">Later</option>
-                      </select>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
+          </div>
         </div>
-
-        <div className="space-y-4">
-          <h2 className="text-xl font-semibold">Impact vs Effort</h2>
-          <div className="aspect-square bg-card border border-border rounded-xl relative p-4 shadow-sm">
-            <div className="absolute inset-0 grid grid-cols-2 grid-rows-2 p-4">
-              <div className="border-r border-b border-border/50 bg-green-500/5 rounded-tl-lg flex items-center justify-center"><span className="text-muted-foreground/30 font-bold rotate-[-45deg]">Quick Wins</span></div>
-              <div className="border-b border-border/50 bg-blue-500/5 rounded-tr-lg flex items-center justify-center"><span className="text-muted-foreground/30 font-bold rotate-[-45deg]">Major Projects</span></div>
-              <div className="border-r border-border/50 bg-orange-500/5 rounded-bl-lg flex items-center justify-center"><span className="text-muted-foreground/30 font-bold rotate-[-45deg]">Fill-ins</span></div>
-              <div className="bg-destructive/5 rounded-br-lg flex items-center justify-center"><span className="text-muted-foreground/30 font-bold rotate-[-45deg]">Time Sink</span></div>
-            </div>
-            
-            {features.map(f => {
-              const bottom = `${((f.impactScore - 1) / 9) * 90 + 5}%`;
-              const left = `${((f.effortScore - 1) / 9) * 90 + 5}%`;
+      ) : (
+        <div className="flex-1 overflow-x-auto overflow-y-hidden">
+          <div className="flex h-full gap-4 min-w-[1000px] pb-4">
+            {ALL_STATUSES.map(colStatus => {
+              const colFeatures = filteredFeatures.filter(f => (f.status || 'Draft') === colStatus);
               
               return (
-                <Link 
-                  href={`/features/${f.id}`}
-                  key={f.id} 
-                  className="absolute w-3 h-3 bg-primary rounded-full cursor-pointer hover:scale-150 transition-transform shadow-sm ring-2 ring-background z-10"
-                  style={{ bottom, left }}
-                  title={`${f.title} (I:${f.impactScore}, E:${f.effortScore})`}
-                />
+                <div key={colStatus} className="flex-1 flex flex-col bg-accent/30 rounded-xl border border-border overflow-hidden">
+                  <div className="p-3 border-b border-border bg-card/50 flex items-center justify-between flex-shrink-0">
+                    <h3 className="font-semibold text-sm flex items-center gap-2">
+                      <div className={`w-2 h-2 rounded-full ${statusColors[colStatus].split(' ')[0]} border ${statusColors[colStatus].split(' ')[2]}`} />
+                      {colStatus}
+                    </h3>
+                    <span className="text-xs font-medium text-muted-foreground bg-accent px-2 py-0.5 rounded-full">
+                      {colFeatures.length}
+                    </span>
+                  </div>
+                  
+                  <div className="flex-1 overflow-y-auto p-3 space-y-3">
+                    {colFeatures.map(f => renderFeatureCard(f, true))}
+                    {colFeatures.length === 0 && (
+                      <div className="text-center p-6 border-2 border-dashed border-border rounded-lg text-muted-foreground text-sm">
+                        Drop features here
+                      </div>
+                    )}
+                  </div>
+                </div>
               )
             })}
-            
-            <div className="absolute left-2 top-1/2 -translate-y-1/2 -rotate-90 text-xs font-medium text-muted-foreground">Impact &rarr;</div>
-            <div className="absolute bottom-2 left-1/2 -translate-x-1/2 text-xs font-medium text-muted-foreground">Effort &rarr;</div>
           </div>
         </div>
-      </div>
+      )}
 
       {isModalOpen && (
         <div className="fixed inset-0 bg-background/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
@@ -384,6 +539,39 @@ export default function FeaturePlannerPage() {
                 <div className="space-y-2 md:col-span-2">
                   <label className="text-sm font-medium">Tags</label>
                   <TagInput tags={tags} onChange={setTags} placeholder="Add tags like 'UI', 'Backend'..." />
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Status</label>
+                  <select value={status} onChange={e => setStatus(e.target.value as FeatureStatus)} className="w-full px-3 py-2 border rounded-md bg-background">
+                    {ALL_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Assignee</label>
+                  <select value={assigneeId} onChange={e => setAssigneeId(e.target.value)} className="w-full px-3 py-2 border rounded-md bg-background">
+                    <option value="">Unassigned</option>
+                    {stakeholders.map(s => <option key={s.id} value={s.id}>{s.name} ({s.role})</option>)}
+                  </select>
+                </div>
+
+                <div className="space-y-2 md:col-span-2">
+                  <label className="text-sm font-medium">Dependencies (Blocked By)</label>
+                  <select 
+                    multiple
+                    value={dependsOn} 
+                    onChange={e => {
+                      const selected = Array.from(e.target.selectedOptions, option => option.value);
+                      setDependsOn(selected);
+                    }} 
+                    className="w-full px-3 py-2 border rounded-md bg-background h-24"
+                  >
+                    {features.filter(f => f.id !== editingFeatureId).map(f => (
+                      <option key={f.id} value={f.id}>{f.title}</option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-muted-foreground">Hold Ctrl/Cmd to select multiple dependencies.</p>
                 </div>
 
                 <div className="space-y-2">

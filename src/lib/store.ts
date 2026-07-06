@@ -7,6 +7,7 @@ import { withUndo, WithUndo } from './undoMiddleware';
 export type MissionStatus = 'To Do' | 'In Progress' | 'Blocked' | 'Done';
 export type RequestStatus = 'New' | 'Under Review' | 'Planned' | 'Rejected' | 'Completed';
 export type FeaturePriority = 'Low' | 'Medium' | 'High' | 'Critical';
+export type FeatureStatus = 'Draft' | 'In Development' | 'QA' | 'Done';
 export type RoadmapPhase = 'Now' | 'Next' | 'Later';
 export type ReleaseStatus = 'Planning' | 'In Progress' | 'Released';
 
@@ -44,6 +45,8 @@ export interface Feature {
   title: string;
   description: string;
   priority: FeaturePriority;
+  status: FeatureStatus;
+  assigneeId?: string;
   impactScore: number;
   effortScore: number;
   reach: number;
@@ -316,12 +319,18 @@ export const useStore = create<AppState & WithUndo>()(
       name: 'pm-multi-tool-storage',
       storage: createJSONStorage(() => idbStorage),
       merge: (persistedState: any, currentState: AppState) => {
+        const mergedFeatures = (persistedState.features || []).map((f: any) => ({
+          ...f,
+          status: f.status || 'Draft',
+          // assigneeId defaults to undefined
+        }));
+
         return {
           ...currentState,
           ...persistedState,
           missions: persistedState.missions || [],
           customerRequests: persistedState.customerRequests || [],
-          features: persistedState.features || [],
+          features: mergedFeatures,
           releases: persistedState.releases || [],
           comments: persistedState.comments || [],
           stakeholders: persistedState.stakeholders || [],
